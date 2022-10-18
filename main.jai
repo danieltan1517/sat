@@ -1,19 +1,35 @@
 main :: () {
   solver: Solver;
   //open_cnf_file(*solver, "cnfs/uf20-01.cnf");
-  open_cnf_file(*solver, "cnfs/sat.cnf");
+  //open_cnf_file(*solver, "cnfs/sat.cnf");
+  //open_cnf_file(*solver, "cnfs/bcp.cnf");
+  open_cnf_file(*solver, "cnfs/unsat.cnf");
+  //open_cnf_file(*solver, "cnfs/bcp2.cnf");
   for c: solver.clauses {
-    print_clause(c.lit);
+    print_clause(c);
   }
   print("number of variables: %\n", solver.num_vars);
   print("number of clauses: %\n", solver.num_clauses);
+  sat := search(*solver);
+  if sat then {
+    for var, count: solver.vars {
+      print("x%1 = %2\n", count, var);
+    }
+    print("sat\n");
+  } else {
+    print("unsat\n");
+  }
 }
 
+called := false;
+
 open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
+  assert(called == false, "Error. function called more than once.\n");
   textfile, success := read_entire_file(filename);
   if !success {
     return;
   }
+  called = true;
 
   numvars := -1;
   numclauses := -1;
@@ -89,9 +105,19 @@ open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
     }
   }
 
+  if array {
+    print("Error. No zero at the end.\n");
+    return;
+  }
+
   solver.num_vars = numvars;
   solver.num_clauses = clauses.count;
-  solver.variables = NewArray(numvars, Var);
+
+  array_reserve(*solver.vars, (numvars * 5) / 4);
+  for i: 0..numvars-1 {
+    array_add(*solver.vars, .Unassign);
+  }
+  print("cnf count: %\n", solver.vars.count);
   solver.clauses   = clauses;
   return true;
 
@@ -138,9 +164,11 @@ open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
 Lit :: #type, distinct s32;
 NOT : Lit : 0x8000_0000;
 
-print_clause :: (arr: [] Lit) {
+print_clause :: (clause: Clause) {
   print("(");
-  for l, count: arr {
+  count := 0;
+  while count < clause.count {
+    l := clause[count];
     sign := NOT & l;
     if sign == NOT then
       print(" !");
@@ -149,18 +177,21 @@ print_clause :: (arr: [] Lit) {
 
     l = ~NOT & l;
     print("x% ", l);
-    if count < arr.count-1 then
+    if count < clause.count-1 then
       print("v");
+    count += 1;
   }
   print(")\n");
 }
 
 Solver :: struct {
-  num_vars:    int;
-  num_clauses: int;
-  variables:   []   Var;
-  clauses:     [..] Clause;
+  num_vars:       int;
+  num_clauses:    int;
+  level:          int;
+  vars:           [..] Var;
+  clauses:        [..] Clause;
   learnt_clauses: [..] Clause;
+  num_assigned:   int;
 }
 
 Var :: enum u8 {
@@ -174,12 +205,104 @@ Clause :: struct {
   count: s32;     // TODO: should we include more info?
 }
 
-operator [] :: inline (clause: Clause, index: int) -> Lit {
+operator [] :: inline (clause: Clause, index: int) -> Lit #expand {
   return clause.lit[index];
 }
 
-operator []= :: inline (clause: *Clause, index: int, lit: Lit) {
+operator []= :: inline (clause: *Clause, index: int, lit: Lit) #expand {
   clause.lit[index] = lit;
+}
+
+get_lit :: (l: Lit) -> Var, num: int {
+  flag := (cast(Var) ((l & NOT) <<< 1)) ^ .True;
+  num  := cast(int) (l & ~NOT);
+  return flag, num;
+}
+
+search :: (solver: *Solver) -> bool {
+  solver.level = 0;
+  while true {
+    stat := bcp(solver);
+    if stat == .Conflict {
+      // backtrack.
+      return false;
+
+    } else {
+      // choose another variable.
+      if solver.num_assigned >= solver.num_vars
+        break;
+      solver.level += 1;
+    }
+  }
+
+  return true;
+}
+
+bcp :: (solver: *Solver) -> BCP_Status {
+  // TODO: watched literals.
+  while true {
+    TF := false;
+    for clause, index: solver.clauses {
+      if propagate_unit(solver, clause) == {
+      case .Conflict;
+        return .Conflict;
+      case .Unit;
+        TF = true;
+      case .Good;
+        // do nothing.
+      }
+    }
+ 
+    for clause: solver.learnt_clauses {
+      if propagate_unit(solver, clause) == {
+      case .Conflict;
+        return .Conflict;
+      case .Unit;
+        TF = true;
+      case .Good;
+        // do nothing.
+      }
+    }
+    if TF == false 
+      break;
+  }
+
+  return .Good;
+
+  propagate_unit :: (solver: *Solver, clause: Clause) -> BCP_Status {
+    num := clause.count-1;
+    num_unassign := 0;
+    index := -1;
+    for i: 0..clause.count-1 {
+      sign, var_num := get_lit(clause[i]);
+      var := solver.vars[var_num];
+      if var == .Unassign {
+        num_unassign += 1;
+        index = i;
+      } else if var == sign {
+        return .Good;
+      }
+    }
+
+    if num_unassign > 1 {
+      return .Good;
+    } else if num_unassign == 1 {
+      lit := clause[index];
+      v, number := get_lit(lit);
+      solver.vars[number] = v;
+      solver.num_assigned += 1;
+      return .Unit;
+    } else {
+      // conflict
+      return .Conflict;
+    }
+  }
+}
+
+BCP_Status :: enum s8 {
+  Conflict;
+  Good;
+  Unit;
 }
 
 #scope_file
