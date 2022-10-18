@@ -1,10 +1,10 @@
 main :: () {
   solver: Solver;
-  //open_cnf_file(*solver, "cnfs/uf20-01.cnf");
+  open_cnf_file(*solver, "cnfs/uf20-03.cnf");
   //open_cnf_file(*solver, "cnfs/sat.cnf");
   //open_cnf_file(*solver, "cnfs/bcp.cnf");
   //open_cnf_file(*solver, "cnfs/unsat.cnf");
-  open_cnf_file(*solver, "cnfs/bcp2.cnf");
+  //open_cnf_file(*solver, "cnfs/bcp2.cnf");
   for c: solver.clauses {
     print_clause(c);
   }
@@ -13,6 +13,7 @@ main :: () {
   sat := search(*solver);
   print("number of conflicts: %\n", solver.conflicts);
   if sat then {
+    assert(verify(*solver));
     for var, count: solver.vars {
       print("x%1 = %2\n", count, var);
     }
@@ -199,7 +200,7 @@ print_clause :: (clause: Clause) {
 Solver :: struct {
   num_vars:       int;
   num_clauses:    int;
-  level:          int;
+  level:          s32;
   vars:           [..] Var;
   clauses:        [..] Clause;
   learnt_clauses: [..] Clause;
@@ -219,6 +220,15 @@ Clause :: struct {
   count: s32;     // TODO: should we include more info?
 }
 
+for_expansion :: (clause: *Clause, body: Code, f: For_Flags) #expand {
+  `it_index := 0;
+  while it_index < clause.count {
+    `it := clause.lit[it_index];
+    #insert body;
+    it_index += 1;
+  }
+}
+
 operator [] :: inline (clause: Clause, index: int) -> Lit #expand {
   return clause.lit[index];
 }
@@ -228,21 +238,21 @@ operator []= :: inline (clause: *Clause, index: int, lit: Lit) #expand {
 }
 
 Path :: struct {
-  varnum: int;
+  varnum: s32;
   clause: int;
-  level:  int;
+  level:  s32;
   implied: bool;
   value: Var;
 }
 
-get_lit :: (l: Lit) -> Var, num: int {
+get_lit :: (l: Lit) -> Var, num: s32 {
   flag := (cast(Var) ((l & NOT) <<< 1)) ^ .True;
-  num  := cast(int) (l & ~NOT);
+  num  := cast(s32) (l & (~NOT));
   return flag, num;
 }
 
 search :: (solver: *Solver) -> bool {
-  solver.trail.allocator = temp;
+  array_reserve(*solver.trail, (3 * solver.num_vars) / 2);
   solver.level = 0;
 
   while true {
@@ -265,11 +275,11 @@ search :: (solver: *Solver) -> bool {
       }
       solver.num_vars = added;
       solver.level = level;
-
       
-      while true {
+      while solver.trail {
         path := solver.trail[solver.trail.count-1];
         solver.vars[path.varnum] = .Unassign;
+        solver.num_assigned -= 1;
         //print("x% unassign\n", path.varnum);
         if path.level < solver.level
           break;
@@ -301,21 +311,39 @@ random_int :: () -> u64 {
   return rseed * 2685821657736338717;
 }
 
-last_uip :: (solver: *Solver) -> level: int, clause: [..] Lit {
-  level := -1;
+verify :: (solver: *Solver) -> bool {
+  for clause: solver.clauses {
+    sat := false;
+    for lit: clause {
+      var, num := get_lit(lit);
+      variable := solver.vars[num];
+      if var == .False
+        variable ^= .True;
+      if variable == .True
+        sat = true;
+    }
+    if sat == false
+      return false;
+  }
+  return true;
+}
+
+last_uip :: (solver: *Solver) -> level: s32, clause: [..] Lit {
+  level: s32 = -1;
   array: [..] Lit;
   array.allocator = temp;
   num_vars := solver.num_vars;
   for path: solver.trail {
-    if path.level == solver.level break;
     if !path.implied {
-      level = path.level;
-      l: Lit = ---;
-      if path.value == .True {
-        l = NOT | (cast(Lit) path.varnum);
-      } else {
-        l = cast(Lit) path.varnum;
+      if path.level < solver.level then {
+        level = path.level;
       }
+      
+      l: Lit = cast(Lit) path.varnum;
+      if path.value == .True {
+        l |= NOT;
+      } 
+
       array_add(*array, l);
     }
   }
@@ -332,12 +360,14 @@ choose :: (solver: *Solver) {
       solver.vars[r] = cast(Var) (random_int() & 1);
       path: Path;
       path.varnum = xx r;
+      assert(path.varnum >= 0);
       path.clause = -1;
       path.level = solver.level;
       path.implied = false;
       path.value = solver.vars[r];
-      //print("Choose: x%1 = %2\n", path.varnum, path.value);
+      print("Choose: x%1 = %2\n", path.varnum, path.value);
       array_add(*solver.trail, path);
+      solver.num_assigned += 1;
       return;
     }
   }
@@ -403,7 +433,7 @@ bcp :: (solver: *Solver) -> BCP_Status {
       path.level = solver.level;
       path.implied = true;
       path.value = v;
-      //print("Imply x% = %\n", number, v);
+      print("Imply x% = %\n", number, v);
       array_add(*solver.trail, path);
       return .Unit;
     } else {
