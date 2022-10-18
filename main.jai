@@ -1,9 +1,12 @@
 main :: () {
   solver: Solver;
-  open_cnf_file(*solver, "cnfs/uf20-01.cnf");
+  //open_cnf_file(*solver, "cnfs/uf20-01.cnf");
+  open_cnf_file(*solver, "cnfs/sat.cnf");
   for c: solver.clauses {
     print_clause(c.lit);
   }
+  print("number of variables: %\n", solver.num_vars);
+  print("number of clauses: %\n", solver.num_clauses);
 }
 
 open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
@@ -87,7 +90,7 @@ open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
   }
 
   solver.num_vars = numvars;
-  solver.num_clauses = numclauses;
+  solver.num_clauses = clauses.count;
   solver.variables = NewArray(numvars, Var);
   solver.clauses   = clauses;
   return true;
@@ -109,12 +112,13 @@ open_cnf_file :: (solver: *Solver, filename: string) -> success: bool = false {
       clause[2] = lit;
       clause.count = 3;
       array_add(clauses, clause);
+      num_vars += 1;
 
-      for i: 3..array.count-3 {
+      for i: 2..array.count-3 {
         clause[0] = NOT | lit;
         clause[1] = array[i];
-        num_vars += 1;
         lit = cast(Lit) num_vars;
+        num_vars += 1;
         clause[2] = lit;
         clause.count = 3;
         array_add(clauses, clause);
